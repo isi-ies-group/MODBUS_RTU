@@ -74,9 +74,10 @@ void requestMove(void)
 {
   /*
    * What: request one absolute X/Z movement.
-   * How: clamps the physical Z range, then captures g_x_target/g_z_target into the queue message.
+   * How: clamps the configured X/Z range, then captures g_x_target/g_z_target into the queue message.
    * Why: later target changes must not alter a movement command that was already accepted.
    */
+  g_x_target = movementClampVerticalTarget(g_x_target);
   g_z_target = movementClampHorizontalTarget(g_z_target);
   movementPostCommand(CMD_MOVE, g_x_target, g_z_target);
 }
@@ -215,6 +216,7 @@ static void movementPostCommand(MoveCmd cmd, float x_target, float z_target)
 
     if (cmd == CMD_MOVE)
     {
+      x_target = movementClampVerticalTarget(x_target);
       z_target = movementClampHorizontalTarget(z_target);
     }
 

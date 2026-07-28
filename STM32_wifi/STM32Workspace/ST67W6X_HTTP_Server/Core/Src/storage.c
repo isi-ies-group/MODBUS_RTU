@@ -6,13 +6,15 @@
 #include "gps.h"
 #include "global_structs.h"
 #include "main.h"
+#include "movement_parameters.h"
 #include "stm32u5xx_hal_flash.h"
 #include "stm32u5xx_hal_flash_ex.h"
 
 #define STORAGE_MAGIC              0x57435631UL /* "WCV1": Window Control Variables v1. */
-#define STORAGE_VERSION            3UL
+#define STORAGE_VERSION            4UL
 #define STORAGE_LEGACY_VERSION     1UL
 #define STORAGE_V2_VERSION         2UL
+#define STORAGE_V3_VERSION         3UL
 #define STORAGE_FLASH_ADDRESS      (FLASH_BASE + FLASH_SIZE - FLASH_PAGE_SIZE)
 #define STORAGE_FLASH_BANK         FLASH_BANK_2
 #define STORAGE_FLASH_PAGE         (FLASH_PAGE_NB - 1U)
@@ -113,6 +115,44 @@ typedef struct
   int32_t manual_second;
 
   char country[STORAGE_COUNTRY_MAX];
+} StorageRecordV3_t;
+
+typedef struct
+{
+  uint32_t magic;
+  uint32_t version;
+  uint32_t size;
+  uint32_t crc;
+
+  double latitude;
+  double longitude;
+  double pan;
+  double tilt;
+
+  uint32_t tilt_correction;
+  uint32_t auto_mode_on;
+  uint32_t manual_time_on;
+  uint32_t fsm_state;
+
+  float x_pos;
+  float z_pos;
+  float movement_hysteresis_gain;
+  float movement_hysteresis_offset_mm;
+  float vertical_movement_hysteresis_gain;
+  float vertical_movement_hysteresis_offset_mm;
+  float movement_max_x_mm;
+  float movement_max_z_mm;
+  uint32_t movement_speed_us;
+  uint32_t movement_home_speed_us;
+
+  int32_t manual_year;
+  int32_t manual_month;
+  int32_t manual_day;
+  int32_t manual_hour;
+  int32_t manual_minute;
+  int32_t manual_second;
+
+  char country[STORAGE_COUNTRY_MAX];
 } StorageRecord_t;
 
 static StorageRecord_t storage_cache;
@@ -163,6 +203,14 @@ static uint32_t Storage_CalculateCrcV2(const StorageRecordV2_t *record)
                                    sizeof(record->crc));
 }
 
+static uint32_t Storage_CalculateCrcV3(const StorageRecordV3_t *record)
+{
+  return Storage_CalculateCrcBytes(record,
+                                   sizeof(StorageRecordV3_t),
+                                   offsetof(StorageRecordV3_t, crc),
+                                   sizeof(record->crc));
+}
+
 static uint32_t Storage_CalculateCrc(const StorageRecord_t *record)
 {
   return Storage_CalculateCrcBytes(record,
@@ -197,6 +245,10 @@ static void Storage_SetDefaults(StorageRecord_t *record)
   record->movement_hysteresis_offset_mm = MOVEMENT_HYSTERESIS_DEFAULT_OFFSET_MM;
   record->vertical_movement_hysteresis_gain = VERTICAL_MOVEMENT_HYSTERESIS_DEFAULT_GAIN;
   record->vertical_movement_hysteresis_offset_mm = VERTICAL_MOVEMENT_HYSTERESIS_DEFAULT_OFFSET_MM;
+  record->movement_max_x_mm = MOVEMENT_DEFAULT_MAX_X_MM;
+  record->movement_max_z_mm = MOVEMENT_DEFAULT_MAX_Z_MM;
+  record->movement_speed_us = MOVEMENT_DEFAULT_STEP_DELAY_US;
+  record->movement_home_speed_us = MOVEMENT_DEFAULT_HOME_STEP_DELAY_US;
   record->manual_year = 2026;
   record->manual_month = 1;
   record->manual_day = 1;
@@ -209,12 +261,21 @@ static void Storage_SetDefaults(StorageRecord_t *record)
 
 static bool Storage_IsMovementConfigValid(float gain, float offset_mm)
 {
-  return (gain == gain) &&
-         (offset_mm == offset_mm) &&
-         (gain >= -1.0f) &&
-         (gain <= 1.0f) &&
-         (offset_mm >= -50.0f) &&
-         (offset_mm <= 50.0f);
+  return MovementParameters_IsGainValid(gain) &&
+         MovementParameters_IsOffsetMmValid(offset_mm);
+}
+
+static bool Storage_IsMovementRangeConfigValid(float max_x_mm, float max_z_mm)
+{
+  return MovementParameters_IsRangeMmValid(max_x_mm) &&
+         MovementParameters_IsRangeMmValid(max_z_mm);
+}
+
+static bool Storage_IsMovementSpeedConfigValid(uint32_t movement_speed_us,
+                                               uint32_t movement_home_speed_us)
+{
+  return MovementParameters_IsSpeedUsValid(movement_speed_us) &&
+         MovementParameters_IsSpeedUsValid(movement_home_speed_us);
 }
 
 static bool Storage_IsLegacyRecordValid(const StorageRecordV1_t *record)
@@ -271,6 +332,36 @@ static bool Storage_IsV2RecordValid(const StorageRecordV2_t *record)
   return (record->crc == Storage_CalculateCrcV2(record));
 }
 
+static bool Storage_IsV3RecordValid(const StorageRecordV3_t *record)
+{
+  if ((record->magic != STORAGE_MAGIC) ||
+      (record->version != STORAGE_V3_VERSION) ||
+      (record->size != sizeof(StorageRecordV3_t)) ||
+      (record->fsm_state > (uint32_t)EPH_INPUT) ||
+      (record->manual_year < 2000) ||
+      (record->manual_year > 3000) ||
+      (record->manual_month < 1) ||
+      (record->manual_month > 12) ||
+      (record->manual_day < 1) ||
+      (record->manual_day > 31) ||
+      (record->manual_hour < 0) ||
+      (record->manual_hour > 23) ||
+      (record->manual_minute < 0) ||
+      (record->manual_minute > 59) ||
+      (record->manual_second < 0) ||
+      (record->manual_second > 59) ||
+      (!Storage_IsMovementConfigValid(record->movement_hysteresis_gain,
+                                      record->movement_hysteresis_offset_mm)) ||
+      (!Storage_IsMovementConfigValid(record->vertical_movement_hysteresis_gain,
+                                      record->vertical_movement_hysteresis_offset_mm)) ||
+      (record->country[0] == '\0'))
+  {
+    return false;
+  }
+
+  return (record->crc == Storage_CalculateCrcV3(record));
+}
+
 static void Storage_MigrateLegacyRecord(const StorageRecordV1_t *legacy,
                                         StorageRecord_t *record)
 {
@@ -325,6 +416,36 @@ static void Storage_MigrateV2Record(const StorageRecordV2_t *v2,
   record->crc = Storage_CalculateCrc(record);
 }
 
+static void Storage_MigrateV3Record(const StorageRecordV3_t *v3,
+                                    StorageRecord_t *record)
+{
+  Storage_SetDefaults(record);
+
+  record->latitude = v3->latitude;
+  record->longitude = v3->longitude;
+  record->pan = v3->pan;
+  record->tilt = v3->tilt;
+  record->tilt_correction = v3->tilt_correction;
+  record->auto_mode_on = v3->auto_mode_on;
+  record->manual_time_on = v3->manual_time_on;
+  record->fsm_state = v3->fsm_state;
+  record->x_pos = v3->x_pos;
+  record->z_pos = v3->z_pos;
+  record->movement_hysteresis_gain = v3->movement_hysteresis_gain;
+  record->movement_hysteresis_offset_mm = v3->movement_hysteresis_offset_mm;
+  record->vertical_movement_hysteresis_gain = v3->vertical_movement_hysteresis_gain;
+  record->vertical_movement_hysteresis_offset_mm = v3->vertical_movement_hysteresis_offset_mm;
+  record->manual_year = v3->manual_year;
+  record->manual_month = v3->manual_month;
+  record->manual_day = v3->manual_day;
+  record->manual_hour = v3->manual_hour;
+  record->manual_minute = v3->manual_minute;
+  record->manual_second = v3->manual_second;
+  (void)strncpy(record->country, v3->country, sizeof(record->country) - 1U);
+  record->country[sizeof(record->country) - 1U] = '\0';
+  record->crc = Storage_CalculateCrc(record);
+}
+
 /*
  * What: decide whether the flash page contains a usable Window Control record.
  * How: checks identity fields, basic ranges, country string and the stored crc.
@@ -352,6 +473,10 @@ static bool Storage_IsRecordValid(const StorageRecord_t *record)
                                       record->movement_hysteresis_offset_mm)) ||
       (!Storage_IsMovementConfigValid(record->vertical_movement_hysteresis_gain,
                                       record->vertical_movement_hysteresis_offset_mm)) ||
+      (!Storage_IsMovementRangeConfigValid(record->movement_max_x_mm,
+                                           record->movement_max_z_mm)) ||
+      (!Storage_IsMovementSpeedConfigValid(record->movement_speed_us,
+                                           record->movement_home_speed_us)) ||
       (record->country[0] == '\0'))
   {
     return false;
@@ -368,14 +493,23 @@ static bool Storage_IsRecordValid(const StorageRecord_t *record)
 static bool Storage_ReadRecord(StorageRecord_t *record)
 {
   const StorageRecord_t *flash_record = (const StorageRecord_t *)STORAGE_FLASH_ADDRESS;
+  const StorageRecordV3_t *flash_v3_record = (const StorageRecordV3_t *)STORAGE_FLASH_ADDRESS;
   const StorageRecordV2_t *flash_v2_record = (const StorageRecordV2_t *)STORAGE_FLASH_ADDRESS;
   const StorageRecordV1_t *flash_legacy_record = (const StorageRecordV1_t *)STORAGE_FLASH_ADDRESS;
+  StorageRecordV3_t v3_record;
   StorageRecordV2_t v2_record;
   StorageRecordV1_t legacy_record;
 
   (void)memcpy(record, flash_record, sizeof(*record));
   if (Storage_IsRecordValid(record))
   {
+    return true;
+  }
+
+  (void)memcpy(&v3_record, flash_v3_record, sizeof(v3_record));
+  if (Storage_IsV3RecordValid(&v3_record))
+  {
+    Storage_MigrateV3Record(&v3_record, record);
     return true;
   }
 
@@ -444,6 +578,14 @@ static void Storage_ApplyRecordToGlobals(const StorageRecord_t *record)
   g_movement_hysteresis_offset_mm = record->movement_hysteresis_offset_mm;
   g_vertical_movement_hysteresis_gain = record->vertical_movement_hysteresis_gain;
   g_vertical_movement_hysteresis_offset_mm = record->vertical_movement_hysteresis_offset_mm;
+  g_movement_max_x_mm = MovementParameters_ValidatedRangeMm(record->movement_max_x_mm,
+                                                            MOVEMENT_DEFAULT_MAX_X_MM);
+  g_movement_max_z_mm = MovementParameters_ValidatedRangeMm(record->movement_max_z_mm,
+                                                            MOVEMENT_DEFAULT_MAX_Z_MM);
+  g_movement_speed_us = MovementParameters_ValidatedSpeedUs(record->movement_speed_us,
+                                                            MOVEMENT_DEFAULT_STEP_DELAY_US);
+  g_movement_home_speed_us = MovementParameters_ValidatedSpeedUs(record->movement_home_speed_us,
+                                                                 MOVEMENT_DEFAULT_HOME_STEP_DELAY_US);
 
   Storage_ApplyRecordToRtc(record);
 }
@@ -495,6 +637,14 @@ static void Storage_UpdateCacheFromGlobals(void)
   storage_cache.movement_hysteresis_offset_mm = g_movement_hysteresis_offset_mm;
   storage_cache.vertical_movement_hysteresis_gain = g_vertical_movement_hysteresis_gain;
   storage_cache.vertical_movement_hysteresis_offset_mm = g_vertical_movement_hysteresis_offset_mm;
+  storage_cache.movement_max_x_mm = MovementParameters_ValidatedRangeMm(g_movement_max_x_mm,
+                                                                        MOVEMENT_DEFAULT_MAX_X_MM);
+  storage_cache.movement_max_z_mm = MovementParameters_ValidatedRangeMm(g_movement_max_z_mm,
+                                                                        MOVEMENT_DEFAULT_MAX_Z_MM);
+  storage_cache.movement_speed_us = MovementParameters_ValidatedSpeedUs(g_movement_speed_us,
+                                                                        MOVEMENT_DEFAULT_STEP_DELAY_US);
+  storage_cache.movement_home_speed_us = MovementParameters_ValidatedSpeedUs(g_movement_home_speed_us,
+                                                                             MOVEMENT_DEFAULT_HOME_STEP_DELAY_US);
 
   (void)strncpy(storage_cache.country, g_country, sizeof(storage_cache.country) - 1U);
   storage_cache.country[sizeof(storage_cache.country) - 1U] = '\0';

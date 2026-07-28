@@ -153,6 +153,51 @@
             border-left-color: #c00000;
         }
 
+        .movement-parameters-panel {
+            border-left-color: #0078D7;
+        }
+
+        .movement-form-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(240px, 1fr));
+            gap: 10px 16px;
+            margin: 16px 0 0 0;
+        }
+
+        .movement-form {
+            background: #ffffff;
+            border: 1px solid #d8e4ef;
+            border-radius: 8px;
+            box-sizing: border-box;
+            margin-left: 0;
+            padding: 10px;
+        }
+
+        .movement-form label {
+            display: block;
+            font-weight: bold;
+            margin-bottom: 6px;
+        }
+
+        .movement-form input[type="text"] {
+            border: 1px solid #b7c8d8;
+            border-radius: 5px;
+            box-sizing: border-box;
+            padding: 6px;
+            width: 120px;
+        }
+
+        .movement-form input[type="submit"] {
+            background-color: #0078D7;
+            border: none;
+            border-radius: 6px;
+            color: #ffffff;
+            cursor: pointer;
+            font-size: 14px;
+            margin-left: 6px;
+            padding: 7px 12px;
+        }
+
         .alarm-reset-btn {
             background-color: #c00000;
             font-size: 20px;
@@ -200,27 +245,6 @@
 			</form>
 		</div>
 
-		<!-- SECTION 2: Movement Calibration -->
-		<h2>Movement Calibration</h2>
-		<div class="config-panel">
-			<form action="/movement_gain_submit" method="get">
-				Horizontal gain: <input class="movement-config-control" type="text" name="gain" placeholder="0.053333"><br>
-				<input class="movement-config-control" type="submit" value="Save Gain">
-			</form>
-			<form action="/movement_offset_submit" method="get">
-				Horizontal offset (mm): <input class="movement-config-control" type="text" name="offset" placeholder="0.000"><br>
-				<input class="movement-config-control" type="submit" value="Save Offset">
-			</form>
-			<form action="/vertical_movement_gain_submit" method="get">
-				Vertical gain: <input class="movement-config-control" type="text" name="gain" placeholder="0.000000"><br>
-				<input class="movement-config-control" type="submit" value="Save Vertical Gain">
-			</form>
-			<form action="/vertical_movement_offset_submit" method="get">
-				Vertical offset (mm): <input class="movement-config-control" type="text" name="offset" placeholder="0.000"><br>
-				<input class="movement-config-control" type="submit" value="Save Vertical Offset">
-			</form>
-		</div>
-
 		<!-- SECTION 2: Manual Date & Time -->
 		<h2>Manual Date &amp; Time</h2>
 		<div class="config-panel">
@@ -248,7 +272,7 @@
 		<div class="config-panel">
 			<form action="/manual_goto" method="get">
 				X target: <input class="manual-control" type="text" name="x"><br>
-				Z target: <input class="manual-control" type="number" name="z" min="0" max="72" step="0.01"><br>
+				Z target: <input class="manual-control" type="text" name="z"><br>
 				<button id="manualBeginBtn" type="button" onclick="location.href='/manual_begin'">Begin</button>
 				<input class="manual-control" type="submit" value="Go to X / Z">
 				<button id="manualEndBtn" class="manual-control" type="button" onclick="location.href='/end_manual'">End</button>
@@ -283,10 +307,6 @@
                 <div class="status-item"><span class="status-label">Pan:</span> <span class="status-value" id="pan">---</span></div>
                 <div class="status-item"><span class="status-label">Tilt:</span> <span class="status-value" id="tilt">---</span></div>
                 <div class="status-item"><span class="status-label">Tilt correction:</span> <span class="status-value" id="tilt_correction">---</span></div>
-                <div class="status-item"><span class="status-label">Horizontal gain:</span> <span class="status-value" id="movement_gain">---</span></div>
-                <div class="status-item"><span class="status-label">Horizontal offset:</span> <span class="status-value" id="movement_offset">---</span></div>
-                <div class="status-item"><span class="status-label">Vertical gain:</span> <span class="status-value" id="vertical_movement_gain">---</span></div>
-                <div class="status-item"><span class="status-label">Vertical offset:</span> <span class="status-value" id="vertical_movement_offset">---</span></div>
                 <div class="status-item"><span class="status-label">Azimuth:</span> <span class="status-value" id="azimuth">---</span></div>
                 <div class="status-item"><span class="status-label">Elevation:</span> <span class="status-value" id="elevation">---</span></div>
                 <div class="status-item"><span class="status-label">AOIl:</span> <span class="status-value" id="aoil">---</span></div>
@@ -301,6 +321,63 @@
                 <div class="status-item"><span class="status-label">Accepted Z:</span> <span class="status-value" id="z">---</span></div>
                 <div class="status-item"><span class="status-label">Valid NMEA time:</span> <span class="status-value" id="gps_nmea">---</span></div>
                 <div class="status-item wide"><span class="status-label">Last RMC raw:</span> <span class="status-value" id="gps_last_rmc">---</span></div>
+            </div>
+        </div>
+
+        <h2>Movement parameters</h2>
+        <div class="status-panel movement-parameters-panel">
+            <div class="status-grid">
+                <div class="status-item"><span class="status-label">X gain:</span> <span class="status-value" id="vertical_movement_gain">---</span></div>
+                <div class="status-item"><span class="status-label">X offset (mm):</span> <span class="status-value" id="vertical_movement_offset">---</span></div>
+                <div class="status-item"><span class="status-label">Z gain:</span> <span class="status-value" id="movement_gain">---</span></div>
+                <div class="status-item"><span class="status-label">Z offset (mm):</span> <span class="status-value" id="movement_offset">---</span></div>
+                <div class="status-item"><span class="status-label">X range (mm):</span> <span class="status-value" id="movement_max_x">---</span></div>
+                <div class="status-item"><span class="status-label">Z range (mm):</span> <span class="status-value" id="movement_max_z">---</span></div>
+                <div class="status-item"><span class="status-label">Movement speed (us):</span> <span class="status-value" id="movement_speed">---</span></div>
+                <div class="status-item"><span class="status-label">Home speed (us):</span> <span class="status-value" id="movement_home_speed">---</span></div>
+            </div>
+
+            <div class="movement-form-grid">
+                <form class="movement-form" action="/vertical_movement_gain_submit" method="get">
+                    <label>X gain</label>
+                    <input type="text" name="gain" placeholder="0.000000">
+                    <input type="submit" value="Save">
+                </form>
+                <form class="movement-form" action="/vertical_movement_offset_submit" method="get">
+                    <label>X offset (mm)</label>
+                    <input type="text" name="offset" placeholder="0.000">
+                    <input type="submit" value="Save">
+                </form>
+                <form class="movement-form" action="/movement_gain_submit" method="get">
+                    <label>Z gain</label>
+                    <input type="text" name="gain" placeholder="0.053333">
+                    <input type="submit" value="Save">
+                </form>
+                <form class="movement-form" action="/movement_offset_submit" method="get">
+                    <label>Z offset (mm)</label>
+                    <input type="text" name="offset" placeholder="0.000">
+                    <input type="submit" value="Save">
+                </form>
+                <form class="movement-form" action="/movement_x_range_submit" method="get">
+                    <label>X range (mm)</label>
+                    <input type="text" name="x_range" placeholder="55.000">
+                    <input type="submit" value="Save">
+                </form>
+                <form class="movement-form" action="/movement_z_range_submit" method="get">
+                    <label>Z range (mm)</label>
+                    <input type="text" name="z_range" placeholder="72.000">
+                    <input type="submit" value="Save">
+                </form>
+                <form class="movement-form" action="/movement_speed_submit" method="get">
+                    <label>Movement speed (us)</label>
+                    <input type="text" name="movement_speed" placeholder="600">
+                    <input type="submit" value="Save">
+                </form>
+                <form class="movement-form" action="/movement_home_speed_submit" method="get">
+                    <label>Home speed (us)</label>
+                    <input type="text" name="home_speed" placeholder="1000">
+                    <input type="submit" value="Save">
+                </form>
             </div>
         </div>
 
@@ -460,6 +537,10 @@
                     setText("movement_offset", formatNumber(resp.movement_offset, 3));
                     setText("vertical_movement_gain", formatNumber(resp.vertical_movement_gain, 6));
                     setText("vertical_movement_offset", formatNumber(resp.vertical_movement_offset, 3));
+                    setText("movement_max_x", formatNumber(resp.movement_max_x, 3));
+                    setText("movement_max_z", formatNumber(resp.movement_max_z, 3));
+                    setText("movement_speed", resp.movement_speed);
+                    setText("movement_home_speed", resp.movement_home_speed);
                     setText("any_movement_alarm", resp.any_movement_alarm ? "true" : "false");
                     setText("vertical_top_right_alarm", formatCounter(resp.vertical_top_right_alarm));
                     setText("vertical_top_left_alarm", formatCounter(resp.vertical_top_left_alarm));

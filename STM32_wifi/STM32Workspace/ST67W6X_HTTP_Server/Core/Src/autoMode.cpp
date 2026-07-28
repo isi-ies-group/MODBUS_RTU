@@ -6,6 +6,7 @@
 #include "spa_func.h"
 #include "matrices.h"
 #include "gps.h"
+#include "movement_parameters.h"
 #include "movement_task.h"
 
 
@@ -13,9 +14,7 @@
 #define AUTOMODE_SAFE_X_MM 10.0f
 #define AUTOMODE_SAFE_Z_MM 10.0f
 #define AUTOMODE_MIN_VALID_X_MM 0.0f
-#define AUTOMODE_MAX_VALID_X_MM 55.0f
 #define AUTOMODE_MIN_VALID_Z_MM 0.0f
-#define AUTOMODE_MAX_VALID_Z_MM 75.0f
 
 
 static bool autoModeTargetNeedsMove(float current_x, float current_z,
@@ -42,12 +41,17 @@ static bool autoModeTargetIsValid(float target_x, float target_z)
      * How: accepts only finite values inside the expected solar tracking window.
      * Why: invalid interpolation/solar values must park the panel instead of driving into a limit.
      */
+    const float max_x = MovementParameters_ValidatedRangeMm(g_movement_max_x_mm,
+                                                            MOVEMENT_DEFAULT_MAX_X_MM);
+    const float max_z = MovementParameters_ValidatedRangeMm(g_movement_max_z_mm,
+                                                            MOVEMENT_DEFAULT_MAX_Z_MM);
+
     return std::isfinite(target_x) &&
            std::isfinite(target_z) &&
            (target_x >= AUTOMODE_MIN_VALID_X_MM) &&
-           (target_x <= AUTOMODE_MAX_VALID_X_MM) &&
+           (target_x <= max_x) &&
            (target_z >= AUTOMODE_MIN_VALID_Z_MM) &&
-           (target_z <= AUTOMODE_MAX_VALID_Z_MM);
+           (target_z <= max_z);
 }
 
 static bool autoModeIsNight(time_t now)
@@ -72,8 +76,8 @@ static void autoModeSetSafeParkTarget(void)
      * How: writes the same global target variables consumed by requestMove().
      * Why: the movement task should receive a normal absolute move command to the safe position.
      */
-    g_x_target = AUTOMODE_SAFE_X_MM;
-    g_z_target = AUTOMODE_SAFE_Z_MM;
+    g_x_target = MovementParameters_ClampXTarget(AUTOMODE_SAFE_X_MM);
+    g_z_target = MovementParameters_ClampZTarget(AUTOMODE_SAFE_Z_MM);
 }
 
 

@@ -45,6 +45,7 @@ https://wiki.st.com/stm32mcu/wiki/Connectivity:Wi-Fi_ST67W6X_HTTP_Server_Applica
 #include "global_structs.h"
 #include "gps.h"
 #include "movement_alarm.h"
+#include "movement_parameters.h"
 #include "state_machine.h"
 #include "storage.h"
 
@@ -130,10 +131,6 @@ typedef struct
 /* USER CODE BEGIN PD */
 /** Maximum simultaneous HTTP client tasks. Keep below the ST67 network connection limit. */
 #define HTTP_MAX_ACTIVE_CLIENTS        3U
-#define HTTP_MOVEMENT_GAIN_MIN         (-1.0)
-#define HTTP_MOVEMENT_GAIN_MAX         1.0
-#define HTTP_MOVEMENT_OFFSET_MIN_MM    (-50.0)
-#define HTTP_MOVEMENT_OFFSET_MAX_MM    50.0
 
 /* USER CODE END PD */
 
@@ -234,11 +231,16 @@ static void http_url_decode(char *dst, size_t dst_size, const char *src, size_t 
 static bool http_get_query_param(const char *request, const char *name,
                                  char *value, size_t value_size);
 static bool http_get_query_double(const char *request, const char *name, double *value);
+static bool http_get_query_uint32(const char *request, const char *name, uint32_t *value);
 static bool http_apply_config_submit(const char *request);
 static bool http_apply_movement_gain_submit(const char *request);
 static bool http_apply_movement_offset_submit(const char *request);
 static bool http_apply_vertical_movement_gain_submit(const char *request);
 static bool http_apply_vertical_movement_offset_submit(const char *request);
+static bool http_apply_movement_x_range_submit(const char *request);
+static bool http_apply_movement_z_range_submit(const char *request);
+static bool http_apply_movement_speed_submit(const char *request);
+static bool http_apply_movement_home_speed_submit(const char *request);
 static bool http_apply_manual_datetime(const char *request);
 static bool http_apply_eph_submit(const char *request);
 static bool http_apply_manual_goto(const char *request);
@@ -544,6 +546,27 @@ static bool http_get_query_double(const char *request, const char *name, double 
   return true;
 }
 
+static bool http_get_query_uint32(const char *request, const char *name, uint32_t *value)
+{
+  double parsed = 0.0;
+  uint32_t converted;
+
+  if ((value == NULL) || (!http_get_query_double(request, name, &parsed)) ||
+      (parsed < 0.0) || (parsed > 4294967295.0))
+  {
+    return false;
+  }
+
+  converted = (uint32_t)parsed;
+  if ((double)converted != parsed)
+  {
+    return false;
+  }
+
+  *value = converted;
+  return true;
+}
+
 static bool http_apply_config_submit(const char *request)
 {
   /*
@@ -630,8 +653,7 @@ static bool http_apply_movement_gain_submit(const char *request)
   double gain = 0.0;
 
   if ((!http_get_query_double(request, "gain", &gain)) ||
-      (gain < HTTP_MOVEMENT_GAIN_MIN) ||
-      (gain > HTTP_MOVEMENT_GAIN_MAX))
+      (!MovementParameters_IsGainValid((float)gain)))
   {
     return false;
   }
@@ -650,8 +672,7 @@ static bool http_apply_movement_offset_submit(const char *request)
   double offset_mm = 0.0;
 
   if ((!http_get_query_double(request, "offset", &offset_mm)) ||
-      (offset_mm < HTTP_MOVEMENT_OFFSET_MIN_MM) ||
-      (offset_mm > HTTP_MOVEMENT_OFFSET_MAX_MM))
+      (!MovementParameters_IsOffsetMmValid((float)offset_mm)))
   {
     return false;
   }
@@ -670,8 +691,7 @@ static bool http_apply_vertical_movement_gain_submit(const char *request)
   double gain = 0.0;
 
   if ((!http_get_query_double(request, "gain", &gain)) ||
-      (gain < HTTP_MOVEMENT_GAIN_MIN) ||
-      (gain > HTTP_MOVEMENT_GAIN_MAX))
+      (!MovementParameters_IsGainValid((float)gain)))
   {
     return false;
   }
@@ -690,13 +710,90 @@ static bool http_apply_vertical_movement_offset_submit(const char *request)
   double offset_mm = 0.0;
 
   if ((!http_get_query_double(request, "offset", &offset_mm)) ||
-      (offset_mm < HTTP_MOVEMENT_OFFSET_MIN_MM) ||
-      (offset_mm > HTTP_MOVEMENT_OFFSET_MAX_MM))
+      (!MovementParameters_IsOffsetMmValid((float)offset_mm)))
   {
     return false;
   }
 
   g_vertical_movement_hysteresis_offset_mm = (float)offset_mm;
+  return saveMovementConfig();
+}
+
+static bool http_apply_movement_x_range_submit(const char *request)
+{
+  /*
+   * What: apply the maximum logical X displacement from the web page.
+   * How: validates the millimetre range and clamps any pending X target to it.
+   * Why: the same safety limit must be shared by manual, EPH and automatic movement.
+   */
+  double range_mm = 0.0;
+
+  if ((!http_get_query_double(request, "x_range", &range_mm)) ||
+      (!MovementParameters_IsRangeMmValid((float)range_mm)))
+  {
+    return false;
+  }
+
+  g_movement_max_x_mm = (float)range_mm;
+  g_x_target = MovementParameters_ClampXTarget(g_x_target);
+  return saveMovementConfig();
+}
+
+static bool http_apply_movement_z_range_submit(const char *request)
+{
+  /*
+   * What: apply the maximum logical Z displacement from the web page.
+   * How: validates the millimetre range and clamps any pending Z target to it.
+   * Why: this keeps the physical stop protection configurable without rebuilding firmware.
+   */
+  double range_mm = 0.0;
+
+  if ((!http_get_query_double(request, "z_range", &range_mm)) ||
+      (!MovementParameters_IsRangeMmValid((float)range_mm)))
+  {
+    return false;
+  }
+
+  g_movement_max_z_mm = (float)range_mm;
+  g_z_target = MovementParameters_ClampZTarget(g_z_target);
+  return saveMovementConfig();
+}
+
+static bool http_apply_movement_speed_submit(const char *request)
+{
+  /*
+   * What: apply the normal movement STEP delay submitted from the web page.
+   * How: validates an integer microsecond delay and saves it as a movement parameter.
+   * Why: movement speed tuning should not require editing movement.cpp.
+   */
+  uint32_t speed_us = 0U;
+
+  if ((!http_get_query_uint32(request, "movement_speed", &speed_us)) ||
+      (!MovementParameters_IsSpeedUsValid(speed_us)))
+  {
+    return false;
+  }
+
+  g_movement_speed_us = speed_us;
+  return saveMovementConfig();
+}
+
+static bool http_apply_movement_home_speed_submit(const char *request)
+{
+  /*
+   * What: apply the first-touch homing STEP delay submitted from the web page.
+   * How: validates an integer microsecond delay and leaves second-touch speed fixed.
+   * Why: coarse homing speed is useful to tune, but final switch contact must stay gentle.
+   */
+  uint32_t speed_us = 0U;
+
+  if ((!http_get_query_uint32(request, "home_speed", &speed_us)) ||
+      (!MovementParameters_IsSpeedUsValid(speed_us)))
+  {
+    return false;
+  }
+
+  g_movement_home_speed_us = speed_us;
   return saveMovementConfig();
 }
 
@@ -833,8 +930,8 @@ static bool http_apply_manual_goto(const char *request)
    * How: writes target globals; movement_task copies them to g_x_val/g_z_val only after moving.
    * Why: status/storage should show the accepted position, not a movement still pending in the queue.
    */
-  g_x_target = (float)x;
-  g_z_target = (float)z;
+  g_x_target = MovementParameters_ClampXTarget((float)x);
+  g_z_target = MovementParameters_ClampZTarget((float)z);
 
   return fsmPostEvent(submit_manual_goto);
 }
@@ -1220,6 +1317,8 @@ static void http_process_response(int32_t client, char *recv_buffer)
                    "\"tilt_correction\":%s,"
                    "\"movement_gain\":%.6f,\"movement_offset\":%.6f,"
                    "\"vertical_movement_gain\":%.6f,\"vertical_movement_offset\":%.6f,"
+                   "\"movement_max_x\":%.3f,\"movement_max_z\":%.3f,"
+                   "\"movement_speed\":%" PRIu32 ",\"movement_home_speed\":%" PRIu32 ","
                    "\"any_movement_alarm\":%s,"
                    "\"vertical_top_right_alarm\":%" PRIu32 ","
                    "\"vertical_top_left_alarm\":%" PRIu32 ","
@@ -1271,6 +1370,10 @@ static void http_process_response(int32_t client, char *recv_buffer)
                    (double)g_movement_hysteresis_offset_mm,
                    (double)g_vertical_movement_hysteresis_gain,
                    (double)g_vertical_movement_hysteresis_offset_mm,
+                   (double)g_movement_max_x_mm,
+                   (double)g_movement_max_z_mm,
+                   (uint32_t)g_movement_speed_us,
+                   (uint32_t)g_movement_home_speed_us,
                    g_any_movement_alarm ? "true" : "false",
                    (uint32_t)alarm_snapshot.vertical_top_right,
                    (uint32_t)alarm_snapshot.vertical_top_left,
@@ -1485,6 +1588,130 @@ static void http_process_response(int32_t client, char *recv_buffer)
       http_send_html_message(client,
                              "Wrong vertical movement offset",
                              "Fill a numeric vertical movement offset between -50 mm and 50 mm.",
+                             true);
+      return;
+    }
+
+    (void)http_server_write(client, response_template, resp_len);
+    return;
+  }
+
+  if (strncmp(recv_buffer, "GET /movement_x_range_submit", strlen("GET /movement_x_range_submit")) == 0)
+  {
+    bool range_ok = http_apply_movement_x_range_submit(recv_buffer);
+
+    if (range_ok)
+    {
+      LogInfo("[MOVEMENT CONFIG] X range=%.3f mm\n",
+              (double)g_movement_max_x_mm);
+
+      resp_len = snprintf(response_template, sizeof(response_template),
+                          "HTTP/1.1 303 See Other\r\n"
+                          "Server: U5\r\n"
+                          "Access-Control-Allow-Origin: * \r\n"
+                          "Cache-Control: no-cache\r\n"
+                          "Connection: close\r\n"
+                          "Location: /\r\n"
+                          "Content-Length: 0\r\n\r\n");
+    }
+    else
+    {
+      http_send_html_message(client,
+                             "Wrong X range",
+                             "Fill a numeric X range between 0 mm and 200 mm.",
+                             true);
+      return;
+    }
+
+    (void)http_server_write(client, response_template, resp_len);
+    return;
+  }
+
+  if (strncmp(recv_buffer, "GET /movement_z_range_submit", strlen("GET /movement_z_range_submit")) == 0)
+  {
+    bool range_ok = http_apply_movement_z_range_submit(recv_buffer);
+
+    if (range_ok)
+    {
+      LogInfo("[MOVEMENT CONFIG] Z range=%.3f mm\n",
+              (double)g_movement_max_z_mm);
+
+      resp_len = snprintf(response_template, sizeof(response_template),
+                          "HTTP/1.1 303 See Other\r\n"
+                          "Server: U5\r\n"
+                          "Access-Control-Allow-Origin: * \r\n"
+                          "Cache-Control: no-cache\r\n"
+                          "Connection: close\r\n"
+                          "Location: /\r\n"
+                          "Content-Length: 0\r\n\r\n");
+    }
+    else
+    {
+      http_send_html_message(client,
+                             "Wrong Z range",
+                             "Fill a numeric Z range between 0 mm and 200 mm.",
+                             true);
+      return;
+    }
+
+    (void)http_server_write(client, response_template, resp_len);
+    return;
+  }
+
+  if (strncmp(recv_buffer, "GET /movement_speed_submit", strlen("GET /movement_speed_submit")) == 0)
+  {
+    bool speed_ok = http_apply_movement_speed_submit(recv_buffer);
+
+    if (speed_ok)
+    {
+      LogInfo("[MOVEMENT CONFIG] Movement step delay=%" PRIu32 " us\n",
+              (uint32_t)g_movement_speed_us);
+
+      resp_len = snprintf(response_template, sizeof(response_template),
+                          "HTTP/1.1 303 See Other\r\n"
+                          "Server: U5\r\n"
+                          "Access-Control-Allow-Origin: * \r\n"
+                          "Cache-Control: no-cache\r\n"
+                          "Connection: close\r\n"
+                          "Location: /\r\n"
+                          "Content-Length: 0\r\n\r\n");
+    }
+    else
+    {
+      http_send_html_message(client,
+                             "Wrong movement speed",
+                             "Fill an integer movement step delay between 100 us and 10000 us.",
+                             true);
+      return;
+    }
+
+    (void)http_server_write(client, response_template, resp_len);
+    return;
+  }
+
+  if (strncmp(recv_buffer, "GET /movement_home_speed_submit", strlen("GET /movement_home_speed_submit")) == 0)
+  {
+    bool speed_ok = http_apply_movement_home_speed_submit(recv_buffer);
+
+    if (speed_ok)
+    {
+      LogInfo("[MOVEMENT CONFIG] Home step delay=%" PRIu32 " us\n",
+              (uint32_t)g_movement_home_speed_us);
+
+      resp_len = snprintf(response_template, sizeof(response_template),
+                          "HTTP/1.1 303 See Other\r\n"
+                          "Server: U5\r\n"
+                          "Access-Control-Allow-Origin: * \r\n"
+                          "Cache-Control: no-cache\r\n"
+                          "Connection: close\r\n"
+                          "Location: /\r\n"
+                          "Content-Length: 0\r\n\r\n");
+    }
+    else
+    {
+      http_send_html_message(client,
+                             "Wrong home speed",
+                             "Fill an integer homing step delay between 100 us and 10000 us. Second touch stays fixed.",
                              true);
       return;
     }
