@@ -44,6 +44,15 @@ float MovementParameters_ValidatedOffsetMm(float value, float default_value);
 float MovementParameters_ValidatedRangeMm(float value, float default_value);
 uint32_t MovementParameters_ValidatedSpeedUs(uint32_t value, uint32_t default_value);
 
+bool MovementParameters_SetHorizontalGain(float gain);
+bool MovementParameters_SetHorizontalOffsetMm(float offset_mm);
+bool MovementParameters_SetVerticalGain(float gain);
+bool MovementParameters_SetVerticalOffsetMm(float offset_mm);
+bool MovementParameters_SetMaxXMM(float max_x_mm);
+bool MovementParameters_SetMaxZMM(float max_z_mm);
+bool MovementParameters_SetMovementSpeedUs(uint32_t speed_us);
+bool MovementParameters_SetHomeSpeedUs(uint32_t speed_us);
+
 float MovementParameters_ClampXTarget(float xmm);
 float MovementParameters_ClampZTarget(float zmm);
 
