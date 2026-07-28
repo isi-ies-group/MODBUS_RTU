@@ -1,16 +1,16 @@
 #ifndef MOVEMENT_H
 #define MOVEMENT_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define MOVEMENT_HORIZONTAL_MAX_MM 72.0f
-
 void init_motors(void);
-void move(float xmm, float zmm);
+bool move(float xmm, float zmm);
+float movementClampVerticalTarget(float xmm);
 float movementClampHorizontalTarget(float zmm);
 void GoHomePair(float *posX, float *posZ);
 uint8_t movementLimitSwitchUpdateFromExti(uint16_t gpio_pin);

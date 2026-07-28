@@ -73,9 +73,10 @@ void requestMove(void)
 {
   /*
    * What: request one absolute X/Z movement.
-   * How: clamps the physical Z range, then captures g_x_target/g_z_target into the queue message.
+   * How: clamps the configured X/Z range, then captures g_x_target/g_z_target into the queue message.
    * Why: later target changes must not alter a movement command that was already accepted.
    */
+  g_x_target = movementClampVerticalTarget(g_x_target);
   g_z_target = movementClampHorizontalTarget(g_z_target);
   movementPostCommand(CMD_MOVE, g_x_target, g_z_target);
 }
@@ -128,15 +129,17 @@ static void movementTask(void *argument)
            */
           DisableSuppressTicksAndSleep(1UL << CFG_TICKLESS_MOVEMENT_ID);
           /* move() consumes the captured absolute X/Z target from this queue message. */
-          move(msg.x_target, msg.z_target);
-          /*
-           * What: accept the theoretical position only after pulse generation finished.
-           * How: copy the command target to g_x_val/g_z_val after move() returns.
-           * Why: web status/storage must represent completed movement, not pending intent.
-           */
-          g_x_val = msg.x_target;
-          g_z_val = msg.z_target;
-          (void)savePos();
+          if (move(msg.x_target, msg.z_target))
+          {
+            /*
+             * What: accept the theoretical position only after pulse generation finished.
+             * How: copy the command target to g_x_val/g_z_val after move() returns.
+             * Why: status/storage must represent completed movement, not pending intent.
+             */
+            g_x_val = msg.x_target;
+            g_z_val = msg.z_target;
+            (void)savePos();
+          }
           EnableSuppressTicksAndSleep(1UL << CFG_TICKLESS_MOVEMENT_ID);
           break;
 
@@ -203,6 +206,7 @@ static void movementPostCommand(MoveCmd cmd, float x_target, float z_target)
 
     if (cmd == CMD_MOVE)
     {
+      x_target = movementClampVerticalTarget(x_target);
       z_target = movementClampHorizontalTarget(z_target);
     }
 

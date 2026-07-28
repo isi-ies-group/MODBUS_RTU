@@ -6,6 +6,7 @@
 #include "main.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "movement_parameters.h"
 
 #ifndef YLI_Pin
 #define YLI_Pin YLY_Pin
@@ -61,29 +62,18 @@
 #define ENABLE_ACTIVE     GPIO_PIN_RESET
 #define ENABLE_INACTIVE   GPIO_PIN_SET
 
-static const long HOMING_SPEED_FAST = 500;
-static const long HOMING_SPEED_SLOW = 1000;
 static const long DIR_CHANGE_DELAY_US = 10000;
 static const int BACKOFF_STEPS = 30;
 static const long VERTICAL_STEPS_PER_MM = 25;
 static const long HORIZONTAL_STEPS_PER_MM = 20;
-static const long HORIZONTAL_HYSTERESIS_REFERENCE_MM = 75;
-static const long HORIZONTAL_HYSTERESIS_EXTRA_MM = 4;
 static const long FIRST_TOUCH_EXTRA_MM = 30;
-static const long BASE_MAX_X_HOMING_STEPS = 1500;
-static const long BASE_MAX_Z_HOMING_STEPS = 1200;
-static const long MAX_X_HOMING_STEPS =
-  BASE_MAX_X_HOMING_STEPS + (VERTICAL_STEPS_PER_MM * FIRST_TOUCH_EXTRA_MM);
-static const long MAX_Z_HOMING_STEPS =
-  BASE_MAX_Z_HOMING_STEPS + (HORIZONTAL_STEPS_PER_MM * FIRST_TOUCH_EXTRA_MM);
 static const long SECOND_TOUCH_EXTRA_MM = 70;
 static const long MAX_VERTICAL_SECOND_TOUCH_STEPS =
   BACKOFF_STEPS + (VERTICAL_STEPS_PER_MM * SECOND_TOUCH_EXTRA_MM);
 static const long MAX_HORIZONTAL_SECOND_TOUCH_STEPS =
   BACKOFF_STEPS + (HORIZONTAL_STEPS_PER_MM * SECOND_TOUCH_EXTRA_MM);
-static const long Speed = 600;
 
-/* Software position counters; they are only reliable after a valid homing cycle. */
+/* Compensated motor-step counters; logical position stays in g_x_val/g_z_val. */
 static long CurrentStep1 = 0;
 static long CurrentStep2 = 0;
 
@@ -143,32 +133,145 @@ static long abs_long(long value)
   return (value < 0) ? -value : value;
 }
 
-static long horizontal_hysteresis_extra_steps(long logical_steps)
+static float abs_float(float value)
 {
-  const long reference_steps = HORIZONTAL_STEPS_PER_MM * HORIZONTAL_HYSTERESIS_REFERENCE_MM;
-  const long extra_steps_at_reference = HORIZONTAL_STEPS_PER_MM * HORIZONTAL_HYSTERESIS_EXTRA_MM;
+  return (value < 0.0f) ? -value : value;
+}
 
-  if ((logical_steps <= 0) || (reference_steps <= 0))
+static uint32_t movement_step_delay_us(void)
+{
+  return MovementParameters_ValidatedSpeedUs(g_movement_speed_us,
+                                             MOVEMENT_DEFAULT_STEP_DELAY_US);
+}
+
+static uint32_t movement_home_step_delay_us(void)
+{
+  return MovementParameters_ValidatedSpeedUs(g_movement_home_speed_us,
+                                             MOVEMENT_DEFAULT_HOME_STEP_DELAY_US);
+}
+
+static long movement_homing_max_steps(float configured_range_mm,
+                                      float default_range_mm,
+                                      long steps_per_mm,
+                                      float gain,
+                                      float offset_mm,
+                                      float default_gain,
+                                      float default_offset_mm)
+{
+  float range_mm = MovementParameters_ValidatedRangeMm(configured_range_mm,
+                                                       default_range_mm);
+  float safe_mm;
+
+  if (steps_per_mm <= 0)
   {
     return 0;
   }
 
-  return ((logical_steps * extra_steps_at_reference) + (reference_steps / 2L)) / reference_steps;
+  gain = MovementParameters_ValidatedGain(gain, default_gain);
+  offset_mm = MovementParameters_ValidatedOffsetMm(offset_mm, default_offset_mm);
+
+  /*
+   * What: calculate the first-touch homing runaway limit from the configured travel.
+   * How: uses range*(1+gain), adds the absolute offset and the coarse-touch safety margin.
+   * Why: X/Z range and offset are tunable now, so homing cannot depend on fixed old steps.
+   */
+  safe_mm = (range_mm * (1.0f + gain)) + abs_float(offset_mm) + (float)FIRST_TOUCH_EXTRA_MM;
+  if (safe_mm <= 0.0f)
+  {
+    return 0;
+  }
+
+  return (long)((safe_mm * (float)steps_per_mm) + 0.5f);
+}
+
+static long vertical_homing_max_steps(void)
+{
+  return movement_homing_max_steps(g_movement_max_x_mm,
+                                   MOVEMENT_DEFAULT_MAX_X_MM,
+                                   VERTICAL_STEPS_PER_MM,
+                                   g_vertical_movement_hysteresis_gain,
+                                   g_vertical_movement_hysteresis_offset_mm,
+                                   VERTICAL_MOVEMENT_HYSTERESIS_DEFAULT_GAIN,
+                                   VERTICAL_MOVEMENT_HYSTERESIS_DEFAULT_OFFSET_MM);
+}
+
+static long horizontal_homing_max_steps(void)
+{
+  return movement_homing_max_steps(g_movement_max_z_mm,
+                                   MOVEMENT_DEFAULT_MAX_Z_MM,
+                                   HORIZONTAL_STEPS_PER_MM,
+                                   g_movement_hysteresis_gain,
+                                   g_movement_hysteresis_offset_mm,
+                                   MOVEMENT_HYSTERESIS_DEFAULT_GAIN,
+                                   MOVEMENT_HYSTERESIS_DEFAULT_OFFSET_MM);
+}
+
+static long movement_compensated_target_steps(float logical_mm,
+                                              long steps_per_mm,
+                                              float gain,
+                                              float offset_mm,
+                                              float default_gain,
+                                              float default_offset_mm)
+{
+  float compensated_mm;
+  float compensated_steps;
+
+  if (steps_per_mm <= 0)
+  {
+    return 0;
+  }
+
+  if (logical_mm != logical_mm)
+  {
+    logical_mm = 0.0f;
+  }
+
+  gain = MovementParameters_ValidatedGain(gain, default_gain);
+  offset_mm = MovementParameters_ValidatedOffsetMm(offset_mm, default_offset_mm);
+
+  /*
+   * What: convert a logical target into the compensated motor coordinate.
+   * How: applies compensation once to the absolute target: motor_mm = target*(1+gain) - offset.
+   * Why: offset/gain must not be added to every small movement or automatic mode will accumulate error.
+   */
+  compensated_mm = (logical_mm * (1.0f + gain)) - offset_mm;
+  if (compensated_mm <= 0.0f)
+  {
+    return 0;
+  }
+
+  compensated_steps = compensated_mm * (float)steps_per_mm;
+  return (long)(compensated_steps + 0.5f);
+}
+
+static long horizontal_compensated_target_steps(float logical_mm)
+{
+  return movement_compensated_target_steps(logical_mm,
+                                           HORIZONTAL_STEPS_PER_MM,
+                                           g_movement_hysteresis_gain,
+                                           g_movement_hysteresis_offset_mm,
+                                           MOVEMENT_HYSTERESIS_DEFAULT_GAIN,
+                                           MOVEMENT_HYSTERESIS_DEFAULT_OFFSET_MM);
+}
+
+static long vertical_compensated_target_steps(float logical_mm)
+{
+  return movement_compensated_target_steps(logical_mm,
+                                           VERTICAL_STEPS_PER_MM,
+                                           g_vertical_movement_hysteresis_gain,
+                                           g_vertical_movement_hysteresis_offset_mm,
+                                           VERTICAL_MOVEMENT_HYSTERESIS_DEFAULT_GAIN,
+                                           VERTICAL_MOVEMENT_HYSTERESIS_DEFAULT_OFFSET_MM);
 }
 
 float movementClampHorizontalTarget(float zmm)
 {
-  if (zmm < 0.0f)
-  {
-    return 0.0f;
-  }
+  return MovementParameters_ClampZTarget(zmm);
+}
 
-  if (zmm > MOVEMENT_HORIZONTAL_MAX_MM)
-  {
-    return MOVEMENT_HORIZONTAL_MAX_MM;
-  }
-
-  return zmm;
+float movementClampVerticalTarget(float xmm)
+{
+  return MovementParameters_ClampXTarget(xmm);
 }
 
 /* Small wrapper around HAL_GPIO_WritePin() to keep movement code compact. */
@@ -415,12 +518,16 @@ void init_motors(void)
 }
 
 /* Move to absolute X/Z targets while stopping each axis on active endstops. */
-void move(float xmm, float zmm)
+bool move(float xmm, float zmm)
 {
+  uint32_t step_delay_us = movement_step_delay_us();
+
   movementLimitSwitchRefreshAll();
 
-  /* Manual X/Z inputs are treated as absolute position targets, not relative moves. */
-  long targetStepsX = (long)(xmm * (float)VERTICAL_STEPS_PER_MM);
+  /* Manual X/Z inputs are logical absolute targets; motor counters use compensated targets. */
+  xmm = movementClampVerticalTarget(xmm);
+  zmm = movementClampHorizontalTarget(zmm);
+  long targetStepsX = vertical_compensated_target_steps(xmm);
   long diffX = targetStepsX - CurrentStep1;
 
   if (diffX != 0)
@@ -457,13 +564,13 @@ void move(float xmm, float zmm)
       write_pin(STEP2_Port, STEP2_Pin, GPIO_PIN_RESET);
       write_pin(STEP3_Port, STEP3_Pin, GPIO_PIN_RESET);
       write_pin(STEP4_Port, STEP4_Pin, GPIO_PIN_RESET);
-      delay_us((uint32_t)Speed);
+      delay_us(step_delay_us);
 
       write_pin(STEP1_Port, STEP1_Pin, GPIO_PIN_SET);
       write_pin(STEP2_Port, STEP2_Pin, GPIO_PIN_SET);
       write_pin(STEP3_Port, STEP3_Pin, GPIO_PIN_SET);
       write_pin(STEP4_Port, STEP4_Pin, GPIO_PIN_SET);
-      delay_us((uint32_t)Speed);
+      delay_us(step_delay_us);
       moved_steps++;
 
       if (!vertical_limit_active())
@@ -497,14 +604,12 @@ void move(float xmm, float zmm)
   vTaskDelay(pdMS_TO_TICKS(1));
 
   /* The horizontal axis uses the same absolute-target model with its own counter. */
-  zmm = movementClampHorizontalTarget(zmm);
-  long targetStepsZ = (long)(zmm * (float)HORIZONTAL_STEPS_PER_MM);
+  long targetStepsZ = horizontal_compensated_target_steps(zmm);
   long diffZ = targetStepsZ - CurrentStep2;
 
   if (diffZ != 0)
   {
     long steps = abs_long(diffZ);
-    long drive_steps = steps + horizontal_hysteresis_extra_steps(steps);
     long driven_steps = 0;
     bool moving_positive = (diffZ > 0);
     bool released_once = !horizontal_limit_active();
@@ -520,7 +625,7 @@ void move(float xmm, float zmm)
       set_horizontal_dir_negative();
     }
 
-    for (long i = 0; i < drive_steps; i++)
+    for (long i = 0; i < steps; i++)
     {
       if (limit_should_stop_axis(moving_positive, released_once, horizontal_limit_active()))
       {
@@ -534,11 +639,11 @@ void move(float xmm, float zmm)
        */
       write_pin(STEP5_Port, STEP5_Pin, GPIO_PIN_RESET);
       write_pin(STEP6_Port, STEP6_Pin, GPIO_PIN_RESET);
-      delay_us((uint32_t)Speed);
+      delay_us(step_delay_us);
 
       write_pin(STEP5_Port, STEP5_Pin, GPIO_PIN_SET);
       write_pin(STEP6_Port, STEP6_Pin, GPIO_PIN_SET);
-      delay_us((uint32_t)Speed);
+      delay_us(step_delay_us);
       driven_steps++;
 
       if (!horizontal_limit_active())
@@ -559,17 +664,18 @@ void move(float xmm, float zmm)
 
     write_pin(STEP5_Port, STEP5_Pin, GPIO_PIN_RESET);
     write_pin(STEP6_Port, STEP6_Pin, GPIO_PIN_RESET);
-    if (driven_steps == drive_steps)
+    if (driven_steps == steps)
     {
       CurrentStep2 = targetStepsZ;
     }
     else
     {
-      long logical_steps_done = (driven_steps < steps) ? driven_steps : steps;
-      CurrentStep2 += moving_positive ? logical_steps_done : -logical_steps_done;
+      CurrentStep2 += moving_positive ? driven_steps : -driven_steps;
     }
     enable_horizontal(false);
   }
+
+  return true;
 }
 
 /*
@@ -584,6 +690,9 @@ void GoHomePair(float *posX, float *posZ)
   bool xHomingReached = false;
   bool zHomingReached = false;
   long safeSteps = 0;
+  uint32_t home_step_delay_us = movement_home_step_delay_us();
+  long max_x_homing_steps = vertical_homing_max_steps();
+  long max_z_homing_steps = horizontal_homing_max_steps();
 
   movementLimitSwitchRefreshAll();
 
@@ -615,7 +724,7 @@ void GoHomePair(float *posX, float *posZ)
   set_horizontal_dir_negative();
 
   safeSteps = 0;
-  while (!xHomingReached && (safeSteps < MAX_X_HOMING_STEPS))
+  while (!xHomingReached && (safeSteps < max_x_homing_steps))
   {
     /*
      * What: first vertical touch.
@@ -629,11 +738,11 @@ void GoHomePair(float *posX, float *posZ)
     }
 
     set_vertical_step(GPIO_PIN_RESET);
-    delay_us((uint32_t)HOMING_SPEED_SLOW);
+    delay_us(home_step_delay_us);
 
     set_vertical_step(GPIO_PIN_SET);
 
-    delay_us((uint32_t)HOMING_SPEED_SLOW);
+    delay_us(home_step_delay_us);
 
     safeSteps++;
 
@@ -655,7 +764,7 @@ void GoHomePair(float *posX, float *posZ)
   }
 
   safeSteps = 0;
-  while (!zHomingReached && (safeSteps < MAX_Z_HOMING_STEPS))
+  while (!zHomingReached && (safeSteps < max_z_homing_steps))
   {
     /*
      * What: first horizontal touch.
@@ -669,11 +778,11 @@ void GoHomePair(float *posX, float *posZ)
     }
 
     set_horizontal_step(GPIO_PIN_RESET);
-    delay_us((uint32_t)HOMING_SPEED_SLOW);
+    delay_us(home_step_delay_us);
 
     set_horizontal_step(GPIO_PIN_SET);
 
-    delay_us((uint32_t)HOMING_SPEED_SLOW);
+    delay_us(home_step_delay_us);
 
     safeSteps++;
 
@@ -696,8 +805,8 @@ void GoHomePair(float *posX, float *posZ)
 
   if (xHomingReached && zHomingReached)
   {
-    BackoffAll(BACKOFF_STEPS, HOMING_SPEED_SLOW);
-    SecondTouchPair(HOMING_SPEED_SLOW);
+    BackoffAll(BACKOFF_STEPS, (long)home_step_delay_us);
+    SecondTouchPair((long)MOVEMENT_SECOND_TOUCH_STEP_DELAY_US);
   }
 
   enable_vertical(false);

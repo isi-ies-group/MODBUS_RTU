@@ -658,7 +658,11 @@ static bool http_apply_movement_gain_submit(const char *request)
     return false;
   }
 
-  g_movement_hysteresis_gain = (float)gain;
+  if (!MovementParameters_SetHorizontalGain((float)gain))
+  {
+    return false;
+  }
+
   return saveMovementConfig();
 }
 
@@ -677,7 +681,11 @@ static bool http_apply_movement_offset_submit(const char *request)
     return false;
   }
 
-  g_movement_hysteresis_offset_mm = (float)offset_mm;
+  if (!MovementParameters_SetHorizontalOffsetMm((float)offset_mm))
+  {
+    return false;
+  }
+
   return saveMovementConfig();
 }
 
@@ -696,7 +704,11 @@ static bool http_apply_vertical_movement_gain_submit(const char *request)
     return false;
   }
 
-  g_vertical_movement_hysteresis_gain = (float)gain;
+  if (!MovementParameters_SetVerticalGain((float)gain))
+  {
+    return false;
+  }
+
   return saveMovementConfig();
 }
 
@@ -715,7 +727,11 @@ static bool http_apply_vertical_movement_offset_submit(const char *request)
     return false;
   }
 
-  g_vertical_movement_hysteresis_offset_mm = (float)offset_mm;
+  if (!MovementParameters_SetVerticalOffsetMm((float)offset_mm))
+  {
+    return false;
+  }
+
   return saveMovementConfig();
 }
 
@@ -734,7 +750,11 @@ static bool http_apply_movement_x_range_submit(const char *request)
     return false;
   }
 
-  g_movement_max_x_mm = (float)range_mm;
+  if (!MovementParameters_SetMaxXMM((float)range_mm))
+  {
+    return false;
+  }
+
   g_x_target = MovementParameters_ClampXTarget(g_x_target);
   return saveMovementConfig();
 }
@@ -754,7 +774,11 @@ static bool http_apply_movement_z_range_submit(const char *request)
     return false;
   }
 
-  g_movement_max_z_mm = (float)range_mm;
+  if (!MovementParameters_SetMaxZMM((float)range_mm))
+  {
+    return false;
+  }
+
   g_z_target = MovementParameters_ClampZTarget(g_z_target);
   return saveMovementConfig();
 }
@@ -774,7 +798,11 @@ static bool http_apply_movement_speed_submit(const char *request)
     return false;
   }
 
-  g_movement_speed_us = speed_us;
+  if (!MovementParameters_SetMovementSpeedUs(speed_us))
+  {
+    return false;
+  }
+
   return saveMovementConfig();
 }
 
@@ -793,7 +821,11 @@ static bool http_apply_movement_home_speed_submit(const char *request)
     return false;
   }
 
-  g_movement_home_speed_us = speed_us;
+  if (!MovementParameters_SetHomeSpeedUs(speed_us))
+  {
+    return false;
+  }
+
   return saveMovementConfig();
 }
 
