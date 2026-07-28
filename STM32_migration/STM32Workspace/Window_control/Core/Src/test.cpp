@@ -1,6 +1,7 @@
 #include "test.h"
 
 #include "global_structs.h"
+#include "movement_parameters.h"
 #include "storage.h"
 
 #include <string>
@@ -21,6 +22,12 @@
 #define TEST_STARTUP_COUNTRY               "Spain"
 #define TEST_STARTUP_MOVEMENT_GAIN         MOVEMENT_HYSTERESIS_DEFAULT_GAIN
 #define TEST_STARTUP_MOVEMENT_OFFSET_MM    MOVEMENT_HYSTERESIS_DEFAULT_OFFSET_MM
+#define TEST_STARTUP_VERTICAL_GAIN         VERTICAL_MOVEMENT_HYSTERESIS_DEFAULT_GAIN
+#define TEST_STARTUP_VERTICAL_OFFSET_MM    VERTICAL_MOVEMENT_HYSTERESIS_DEFAULT_OFFSET_MM
+#define TEST_STARTUP_MAX_X_MM              MOVEMENT_DEFAULT_MAX_X_MM
+#define TEST_STARTUP_MAX_Z_MM              MOVEMENT_DEFAULT_MAX_Z_MM
+#define TEST_STARTUP_MOVEMENT_SPEED_US     MOVEMENT_DEFAULT_STEP_DELAY_US
+#define TEST_STARTUP_HOME_SPEED_US         MOVEMENT_DEFAULT_HOME_STEP_DELAY_US
 
 int dummy(int x)
 {
@@ -39,8 +46,14 @@ void Test_SetAutoModeInputs(float pan,
     g_AOIInputs.pan = pan;
     g_AOIInputs.tilt = tilt;
     g_AOIInputs.tilt_correction = tilt_correction;
-    g_movement_hysteresis_gain = TEST_STARTUP_MOVEMENT_GAIN;
-    g_movement_hysteresis_offset_mm = TEST_STARTUP_MOVEMENT_OFFSET_MM;
+    (void)MovementParameters_SetHorizontalGain(TEST_STARTUP_MOVEMENT_GAIN);
+    (void)MovementParameters_SetHorizontalOffsetMm(TEST_STARTUP_MOVEMENT_OFFSET_MM);
+    (void)MovementParameters_SetVerticalGain(TEST_STARTUP_VERTICAL_GAIN);
+    (void)MovementParameters_SetVerticalOffsetMm(TEST_STARTUP_VERTICAL_OFFSET_MM);
+    (void)MovementParameters_SetMaxXMM(TEST_STARTUP_MAX_X_MM);
+    (void)MovementParameters_SetMaxZMM(TEST_STARTUP_MAX_Z_MM);
+    (void)MovementParameters_SetMovementSpeedUs(TEST_STARTUP_MOVEMENT_SPEED_US);
+    (void)MovementParameters_SetHomeSpeedUs(TEST_STARTUP_HOME_SPEED_US);
 
     /* g_country is a fixed C buffer in the migrated application layer. */
     strncpy(g_country, (country != 0) ? country : "", sizeof(g_country) - 1U);
